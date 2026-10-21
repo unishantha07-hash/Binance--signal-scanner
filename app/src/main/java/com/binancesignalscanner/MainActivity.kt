@@ -199,20 +199,29 @@ class MainActivity : Activity() {
                     pool.shutdownNow()
                 }
 
-                val top = found.sortedByDescending { it.score }.take(10)
+                val top = found.filter { it.side == "SELL" }.sortedByDescending { it.score }.take(5)
                 val result = StringBuilder()
                 result.append("SCAN COMPLETE\n")
                 result.append("USDT perpetual pairs: ${symbols.size}\n")
                 result.append("Pairs checked: $scanned\n")
                 result.append("Qualified signals: ${found.size}\n")
-                result.append("Showing top ${top.size}\n")
+                result.append("Top SELL signals: ${top.size}\n")
                 result.append("Score = indicator ranking, NOT win probability.\n\n")
 
                 if (top.isEmpty()) {
                     result.append("No signals met all conditions.\n")
                 } else {
                     top.forEachIndexed { index, s ->
-                        val sl = if (s.side == "BUY") s.price * 0.99 else s.price * 1.01
+                        val marginUsdt = 5.0
+                        val leverage = 15.0
+                        val positionValue = marginUsdt * leverage
+                        val maxLossUsdt = 5.0
+                        val priceMove = maxLossUsdt / positionValue
+                        val sl = if (s.side == "BUY") {
+                            s.price * (1.0 - priceMove)
+                        } else {
+                            s.price * (1.0 + priceMove)
+                        }
                         val tp = if (s.side == "BUY") s.price * 1.02 else s.price * 0.98
                         result.append("${index + 1}. ${s.symbol}  ${s.side}\n")
                         result.append("Score: ${s.score}/100\n")
