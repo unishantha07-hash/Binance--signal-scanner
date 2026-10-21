@@ -199,13 +199,13 @@ class MainActivity : Activity() {
                     pool.shutdownNow()
                 }
 
-                val top = found.filter { it.side == "SELL" }.sortedByDescending { it.score }.take(5)
+                val top = found.sortedByDescending { it.score }.take(10)
                 val result = StringBuilder()
                 result.append("SCAN COMPLETE\n")
                 result.append("USDT perpetual pairs: ${symbols.size}\n")
                 result.append("Pairs checked: $scanned\n")
                 result.append("Qualified signals: ${found.size}\n")
-                result.append("Top SELL signals: ${top.size}\n")
+                result.append("Top 10 signals: ${top.size}\n")
                 result.append("Score = indicator ranking, NOT win probability.\n\n")
 
                 if (top.isEmpty()) {
