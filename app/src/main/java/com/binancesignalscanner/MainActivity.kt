@@ -99,6 +99,19 @@ class MainActivity : Activity() {
         return result
     }
 
+    private fun macd(values: List<Double>): Pair<Double, Double> {
+        if (values.size < 35) return Pair(0.0, 0.0)
+
+        val macdValues = mutableListOf<Double>()
+        for (i in 25 until values.size) {
+            val slice = values.subList(0, i + 1)
+            macdValues.add(ema(slice, 12) - ema(slice, 26))
+        }
+
+        val signalLine = ema(macdValues, 9)
+        return Pair(macdValues.last(), signalLine)
+    }
+
     private fun rsi(values: List<Double>, period: Int = 14): Double {
         var gains = 0.0
         var losses = 0.0
@@ -117,6 +130,60 @@ class MainActivity : Activity() {
         return 100.0 - 100.0 / (1.0 + avgGain / avgLoss)
     }
 
+    private fun adx(highs: List<Double>, lows: List<Double>,
+                    closes: List<Double>, period: Int = 14): Double {
+        if (closes.size < period * 2 + 1) return 0.0
+
+        var trSum = 0.0
+        var plusSum = 0.0
+        var minusSum = 0.0
+
+        for (i in 1..period) {
+            val up = highs[i] - highs[i - 1]
+            val down = lows[i - 1] - lows[i]
+            trSum += maxOf(
+                highs[i] - lows[i],
+                abs(highs[i] - closes[i - 1]),
+                abs(lows[i] - closes[i - 1])
+            )
+            plusSum += if (up > down && up > 0.0) up else 0.0
+            minusSum += if (down > up && down > 0.0) down else 0.0
+        }
+
+        val dxValues = mutableListOf<Double>()
+        fun addDx() {
+            if (trSum <= 0.0) {
+                dxValues.add(0.0)
+            } else {
+                val plusDi = 100.0 * plusSum / trSum
+                val minusDi = 100.0 * minusSum / trSum
+                val denominator = plusDi + minusDi
+                dxValues.add(
+                    if (denominator == 0.0) 0.0
+                    else 100.0 * abs(plusDi - minusDi) / denominator
+                )
+            }
+        }
+
+        addDx()
+        for (i in period + 1 until closes.size) {
+            val up = highs[i] - highs[i - 1]
+            val down = lows[i - 1] - lows[i]
+            trSum = trSum - trSum / period + maxOf(
+                highs[i] - lows[i],
+                abs(highs[i] - closes[i - 1]),
+                abs(lows[i] - closes[i - 1])
+            )
+            plusSum = plusSum - plusSum / period +
+                if (up > down && up > 0.0) up else 0.0
+            minusSum = minusSum - minusSum / period +
+                if (down > up && down > 0.0) down else 0.0
+            addDx()
+        }
+
+        return dxValues.takeLast(period).average()
+    }
+
     private fun analyze(symbol: String): Signal? {
         val candles = JSONArray(
             getJson("$api/fapi/v1/klines?symbol=$symbol&interval=5m&limit=60")
@@ -125,19 +192,26 @@ class MainActivity : Activity() {
         val closed = (0 until candles.length() - 1).map { candles.getJSONArray(it) }
         if (closed.size < 30) return null
 
+        val highs = closed.map { it.getString(2).toDouble() }
+        val lows = closed.map { it.getString(3).toDouble() }
         val closes = closed.map { it.getString(4).toDouble() }
         val volumes = closed.map { it.getString(5).toDouble() }
         val price = closes.last()
         val e9 = ema(closes, 9)
         val e21 = ema(closes, 21)
         val r = rsi(closes)
+        val adxValue = adx(highs, lows, closes)
+        val (macdLine, macdSignal) = macd(closes)
+
         val avgVolume = volumes.dropLast(1).takeLast(20).average()
         if (avgVolume <= 0.0) return null
         val ratio = volumes.last() / avgVolume
 
         val side = when {
-            e9 > e21 && r in 50.0..70.0 && ratio > 1.0 -> "BUY"
-            e9 < e21 && r in 30.0..50.0 && ratio > 1.0 -> "SELL"
+            e9 > e21 && r in 50.0..70.0 && ratio > 1.0 &&
+                adxValue >= 20.0 && macdLine > macdSignal -> "BUY"
+            e9 < e21 && r in 30.0..50.0 && ratio > 1.0 &&
+                adxValue >= 20.0 && macdLine < macdSignal -> "SELL"
             else -> return null
         }
 
@@ -199,13 +273,13 @@ class MainActivity : Activity() {
                     pool.shutdownNow()
                 }
 
-                val top = found.sortedByDescending { it.score }.take(10)
+                val top = found.sortedByDescending { it.score }.take(5)
                 val result = StringBuilder()
                 result.append("SCAN COMPLETE\n")
                 result.append("USDT perpetual pairs: ${symbols.size}\n")
                 result.append("Pairs checked: $scanned\n")
                 result.append("Qualified signals: ${found.size}\n")
-                result.append("Top 10 signals: ${top.size}\n")
+                result.append("Top 5 signals: ${top.size}\n")
                 result.append("Score = indicator ranking, NOT win probability.\n\n")
 
                 if (top.isEmpty()) {
