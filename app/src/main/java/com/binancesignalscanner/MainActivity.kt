@@ -21,7 +21,14 @@ data class Signal(
     val ema9: Double,
     val ema21: Double,
     val volumeRatio: Double,
-    val score: Int
+    val adx: Double,
+    val atr: Double,
+    val score: Int,
+    val setup: String = "WAIT",
+    val entry: Double = price,
+    val stopLoss: Double = price,
+    val takeProfit: Double = price,
+    val riskReward: Double = 0.0
 )
 
 class MainActivity : Activity() {
@@ -184,6 +191,25 @@ class MainActivity : Activity() {
         return dxValues.takeLast(period).average()
     }
 
+    private fun atr(
+        highs: List<Double>,
+        lows: List<Double>,
+        closes: List<Double>,
+        period: Int = 14
+    ): Double {
+        if (closes.size < period + 1) return 0.0
+
+        val trueRanges = (1 until closes.size).map { i ->
+            maxOf(
+                highs[i] - lows[i],
+                abs(highs[i] - closes[i - 1]),
+                abs(lows[i] - closes[i - 1])
+            )
+        }
+
+        return trueRanges.takeLast(period).average()
+    }
+
     private fun analyze(symbol: String): Signal? {
         val candles = JSONArray(
             getJson("$api/fapi/v1/klines?symbol=$symbol&interval=5m&limit=60")
@@ -201,6 +227,8 @@ class MainActivity : Activity() {
         val e21 = ema(closes, 21)
         val r = rsi(closes)
         val adxValue = adx(highs, lows, closes)
+        val atrValue = atr(highs, lows, closes, 14)
+        if (atrValue <= 0.0) return null
         val (macdLine, macdSignal) = macd(closes)
 
         val avgVolume = volumes.dropLast(1).takeLast(20).average()
@@ -225,7 +253,45 @@ class MainActivity : Activity() {
             ((ratio - 1.0) * 5.0).coerceIn(0.0, 10.0))
             .toInt().coerceIn(60, 95)
 
-        return Signal(symbol, side, price, r, e9, e21, ratio, score)
+        val setup: String
+        val entry: Double
+        val distanceToEma9 = abs(price - e9)
+
+        if (distanceToEma9 <= atrValue * 0.25) {
+            setup = "MARKET"
+            entry = price
+        } else if ((side == "BUY" && e9 < price) ||
+                   (side == "SELL" && e9 > price)) {
+            setup = "LIMIT"
+            entry = e9
+        } else {
+            setup = "WAIT"
+            entry = price
+        }
+
+        val riskDistance = atrValue * 1.5
+        val stopLoss = if (side == "BUY") {
+            entry - riskDistance
+        } else {
+            entry + riskDistance
+        }
+
+        if (entry <= 0.0 || stopLoss <= 0.0) return null
+
+        val takeProfit = if (side == "BUY") {
+            entry + riskDistance * 2.0
+        } else {
+            entry - riskDistance * 2.0
+        }
+        if (takeProfit <= 0.0) return null
+
+        val riskReward = abs(takeProfit - entry) / abs(entry - stopLoss)
+
+        return Signal(
+            symbol, side, price, r, e9, e21, ratio,
+            adxValue, atrValue, score, setup, entry,
+            stopLoss, takeProfit, riskReward
+        )
     }
 
     private fun startScan() {
@@ -283,29 +349,23 @@ class MainActivity : Activity() {
                 result.append("Score = indicator ranking, NOT win probability.\n\n")
 
                 if (top.isEmpty()) {
-                    result.append("No signals met all conditions.\n")
+                    result.append("No qualified signals. WAIT — do not force an entry.\n")
                 } else {
                     top.forEachIndexed { index, s ->
-                        val marginUsdt = 5.0
-                        val leverage = 15.0
-                        val positionValue = marginUsdt * leverage
-                        val maxLossUsdt = 5.0
-                        val priceMove = maxLossUsdt / positionValue
-                        val sl = if (s.side == "BUY") {
-                            s.price * (1.0 - priceMove)
-                        } else {
-                            s.price * (1.0 + priceMove)
-                        }
-                        val tp = if (s.side == "BUY") s.price * 1.02 else s.price * 0.98
                         result.append("${index + 1}. ${s.symbol}  ${s.side}\n")
-                        result.append("Score: ${s.score}/100\n")
-                        result.append("Entry: ${"%.8f".format(java.util.Locale.US, s.price)}\n")
-                        result.append("Demo SL: ${"%.8f".format(java.util.Locale.US, sl)}\n")
-                        result.append("Demo TP: ${"%.8f".format(java.util.Locale.US, tp)}\n")
+                        result.append("Setup: ${s.setup}\n")
+                        result.append("Score: ${s.score}/100 (not win probability)\n")
+                        result.append("Current: ${"%.8f".format(java.util.Locale.US, s.price)}\n")
+                        result.append("Entry: ${"%.8f".format(java.util.Locale.US, s.entry)}\n")
+                        result.append("SL: ${"%.8f".format(java.util.Locale.US, s.stopLoss)}\n")
+                        result.append("TP: ${"%.8f".format(java.util.Locale.US, s.takeProfit)}\n")
+                        result.append("Risk/Reward: 1:${"%.2f".format(java.util.Locale.US, s.riskReward)}\n")
+                        result.append("ATR14: ${"%.8f".format(java.util.Locale.US, s.atr)}\n")
                         result.append("RSI: ${"%.1f".format(java.util.Locale.US, s.rsi)}")
-                        result.append(" | EMA9: ${"%.8f".format(java.util.Locale.US, s.ema9)}\n")
-                        result.append("EMA21: ${"%.8f".format(java.util.Locale.US, s.ema21)}")
-                        result.append(" | Vol: ${"%.2f".format(java.util.Locale.US, s.volumeRatio)}x avg\n\n")
+                        result.append(" | ADX: ${"%.1f".format(java.util.Locale.US, s.adx)}\n")
+                        result.append("EMA9: ${"%.8f".format(java.util.Locale.US, s.ema9)}")
+                        result.append(" | EMA21: ${"%.8f".format(java.util.Locale.US, s.ema21)}\n")
+                        result.append("Volume: ${"%.2f".format(java.util.Locale.US, s.volumeRatio)}x average\n\n")
                     }
                 }
                 result.append("5m candles • Public Binance data\n")
