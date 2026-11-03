@@ -1,5 +1,15 @@
 package com.binancesignalscanner
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import androidx.work.Constraints
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
 import android.app.Activity
 import android.os.Bundle
 import android.graphics.Color
@@ -39,6 +49,11 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        scheduleBackgroundScan()
+        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 731)
+        }
+
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -80,6 +95,22 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
         ))
         setContentView(root)
+    }
+
+    private fun scheduleBackgroundScan() {
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+
+        val request = PeriodicWorkRequestBuilder<SignalWorker>(15, TimeUnit.MINUTES)
+            .setConstraints(constraints)
+            .build()
+
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+            "binance_trade_tracker",
+            ExistingPeriodicWorkPolicy.KEEP,
+            request
+        )
     }
 
     private fun getJson(url: String): String {
@@ -340,6 +371,7 @@ class MainActivity : Activity() {
                 }
 
                 val top = found.sortedByDescending { it.score }.take(5)
+                TradeStore.recordSignals(this@MainActivity, top)
                 val result = StringBuilder()
                 result.append("SCAN COMPLETE\n")
                 result.append("USDT perpetual pairs: ${symbols.size}\n")
